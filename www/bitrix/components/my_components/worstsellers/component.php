@@ -11,35 +11,40 @@ if ($this->StartResultCache(false, false)) {
 $arResult = array();
 $arResult['days'] = $arParams['MAIN_PERIOD'];
 
+$date_limit = new DateTime(date('Y-m-d h:m:s'));
+$time_difference = '-'.$arParams['MAIN_PERIOD'].' day';
+$date_limit->modify($time_difference);
+$date_limit = $date_limit->format('d.m.Y h:m:s');
+$date_limit = new \Bitrix\Main\Type\DateTime($date_limit);
+
 $all_buskets = CSaleBasket::GetList( 
 	array(),
-	array(),
+	array(
+		"LID" => SITE_ID,
+		">DATE_INSERT" => $date_limit,
+	),
 	false,
 	false,
 	array(
-		"PRODUCT_ID","QUANTITY","LID","NAME","ORDER_ID","DATE_INSERT","DATE_UPDATE"
+		"PRODUCT_ID","QUANTITY","LID","DATE_INSERT",
 	)
 );
 
-if ($arParams['MAIN_PERIOD'] !== 'нет'):  
-	$site_date_format = CSite::GetDateFormat("SHORT");
-	$php_date_format = $DB->DateFormatToPHP($site_date_format);
-	$date_now = date('Y-m-d');
-	$date_limit = new DateTime($date_now);
-	$time_difference = '-'.$arParams['MAIN_PERIOD'].' day';
-	$date_limit->modify($time_difference);
-	$date_limit = $date_limit->format($php_date_format);
-endif;
-
-
-$buskets_array = array();  
+$BusketsQuantities = array(); 
+$BusketsProductsId = array(); 
+$UnnecessaryProducts = array();
 while ($all_buskets_row = $all_buskets->Fetch()) { 
-	$busket_insert = $DB->FormatDate($all_buskets_row["DATE_INSERT"], $site_date_format, $php_date_format);
-	if(strtotime($busket_insert) > strtotime($date_limit) || $arParams['MAIN_PERIOD'] === 'нет'){
-		array_push($buskets_array, $all_buskets_row);
+	if($BusketsQuantities[$all_buskets_row["PRODUCT_ID"]] != false) {
+		$BusketsQuantities[$all_buskets_row["PRODUCT_ID"]] += $all_buskets_row["QUANTITY"];	
+	}else{
+		$BusketsQuantities[$all_buskets_row["PRODUCT_ID"]] = $all_buskets_row["QUANTITY"];	
+		if($all_buskets_row["QUANTITY"] <= $arParams['MIN_QUANTITY']){
+			array_push($BusketsProductsId, $all_buskets_row["PRODUCT_ID"]);
+		}else{
+			array_push($UnnecessaryProducts, $all_buskets_row["PRODUCT_ID"]);
+		}
 	}
 }
-
 
 $catalog_info = CCatalog::GetList(); 
 while ($ar_cat = $catalog_info->Fetch()) {
@@ -51,143 +56,143 @@ while ($ar_cat = $catalog_info->Fetch()) {
 	}
 }
 
-
-$all_elements_filter = Array("IBLOCK_ID"=>$id_catalog);
+$all_elements_filter = Array("IBLOCK_ID"=>$id_offers);  // фильтр для предложений и товаров
 if($arParams['IS_ACTIVE'] == "Y"){
 	$all_elements_filter['ACTIVE'] = "Y";
 }
-$all_elements = CIBlockElement::GetList(  
-	Array("SORT"=>"ASC" ),
-	$all_elements_filter,
-	false,
-	false,
-	Array(
-	"ID","NAME","ACTIVE","DETAIL_PICTURE","CODE","DETAIL_PAGE_URL"
- )
-);
+$all_elements_filter["!ID"] = $UnnecessaryProducts;
 
-$all_elements_filter['IBLOCK_ID'] = $id_offers;
-$all_offers = CIBlockElement::GetList( 
-	Array("SORT"=>"ASC" ),
-	$all_elements_filter,
-	false,
-	false,
-	Array(
-	"ID","NAME","ACTIVE","IBLOCK_SECTION_ID","DETAIL_PICTURE","CODE","DETAIL_PAGE_URL"
-	)
-);
-
-
-
-$offers_result = array();
-$offers_price = array();
-while ($all_offers_row = $all_offers->Fetch()) {
-	$num_of_buy = 0;
-	foreach ($buskets_array as $buskets_array_row) {
-		if($buskets_array_row['PRODUCT_ID'] == $all_offers_row['ID']){
-			$num_of_buy += $buskets_array_row['QUANTITY']; 
-		}
-	}
-	
-	$current_product_id = CCatalogSku::GetProductInfo($all_offers_row['ID']);
-	if ($num_of_buy > 0) {
-		$offers_result_elem = array(
-			product_id => $current_product_id['ID'],
-			buy_quantity => $num_of_buy,
-		);
-		array_push($offers_result, $offers_result_elem);
-	}
-	
-	
-	$db_price = CPrice::GetList(
-        array(),
-        array("PRODUCT_ID" => $all_offers_row['ID'])
-    );
-	
-	if ($ar_price = $db_price->Fetch()) {
-		if(!$offers_price[$current_product_id['ID']]) {
-			$offers_price[$current_product_id['ID']] = array(
-				"min_price" => $ar_price["PRICE"], 
-				"max_price" => $ar_price["PRICE"], 
-				"currency" => $ar_price["CURRENCY"],
-			);
-		}else{
-			if($offers_price[$current_product_id['ID']]["min_price"] > $ar_price["PRICE"]){
-				$offers_price[$current_product_id['ID']]["min_price"] = $ar_price["PRICE"];
-			}
-			if($offers_price[$current_product_id['ID']]["max_price"] < $ar_price["PRICE"]){
-				$offers_price[$current_product_id['ID']]["max_price"] = $ar_price["PRICE"];
-			}
-		}
+if($id_offers !== false) {
+	$all_offers = CIBlockElement::GetList(  // все предложения
+		Array(),
+		$all_elements_filter,
+		false,
+		false,
+		Array(
+			"ID","NAME","ACTIVE","DETAIL_PAGE_URL"
+		)
+	);
+	$OffersArray = array();
+	while($all_offers_row = $all_offers->Fetch()) { // все предложения вывод
+		array_push($OffersArray, $all_offers_row["ID"]);
 	}
 }
 
+if(!empty($OffersArray)) {
+	$dbOffersPrice = CPrice::GetListEx( // цены всех предложений
+		array(),
+		array("PRODUCT_ID" => $OffersArray),
+		false,
+		false,
+		array("PRODUCT_ID", "PRICE", "CURRENCY")
+	);
 
-$result_array = array();		
-while ($all_elements_row = $all_elements->GetNext()) {
-		
-	$num_of_buy = 0;
-	foreach ($buskets_array as $buskets_array_row) {
-		if($buskets_array_row['PRODUCT_ID'] == $all_elements_row['ID']){
-			$num_of_buy += $buskets_array_row['QUANTITY']; 
-		}
+	$OffersPricesArray = array();
+	while($dbOffersPriceRow = $dbOffersPrice->Fetch()) { // все предложения вывод
+		$OffersPricesArray[$dbOffersPriceRow["PRODUCT_ID"]] = array("PRICE" => $dbOffersPriceRow["PRICE"], "CURRENCY" => $dbOffersPriceRow["CURRENCY"]);
 	}
-	foreach($offers_result as $offers_result_row) {
-		if($all_elements_row['ID'] == $offers_result_row['product_id']) {
-			$num_of_buy += $offers_result_row['buy_quantity'];
-		}	
-	}
-	$all_elements_row['NUM_OF_BUYS'] = $num_of_buy;
-	$all_elements_row['IMG_URL'] = CFile::GetPath($all_elements_row['DETAIL_PICTURE']);
-	$all_elements_row['DETAIL_URL'] = $ar_res['DETAIL_PAGE_URL'];
-
-	$db_price = CPrice::GetList(
-        array(),
-        array("PRODUCT_ID" => $all_elements_row['ID'])
-    );
-	if ($ar_price = $db_price->Fetch()) {
-		if(!$offers_price[$all_elements_row['ID']]) {
-			$offers_price[$all_elements_row['ID']] = array(
-				"min_price" => $ar_price["PRICE"], 
-				"max_price" => $ar_price["PRICE"], 
-				"currency" => $ar_price["CURRENCY"],
-			);
-		}else{
-			if($offers_price[$all_elements_row['ID']]["min_price"] > $ar_price["PRICE"]){
-				$offers_price[$all_elements_row['ID']]["min_price"] = $ar_price["PRICE"];
-			}
-			if($offers_price[$all_elements_row['ID']]["max_price"] < $ar_price["PRICE"]){
-				$offers_price[$all_elements_row['ID']]["max_price"] = $ar_price["PRICE"];
-			}
-		}
-	}
-	$all_elements_row['MIN_PRICE'] = $offers_price[$all_elements_row['ID']]["min_price"];
-	$all_elements_row['MAX_PRICE'] = $offers_price[$all_elements_row['ID']]["max_price"];
-	$all_elements_row['CURRENCY'] = $offers_price[$all_elements_row['ID']]["currency"];
 	
-	$res = CIBlockElement::GetList(array(), array('IBLOCK_ID' => $id_catalog, 'ID' => $all_elements_row['ID']), false, false, array('PROPERTY', 'PROPERTY_ARTNUMBER'));
-	while($ob = $res->GetNextElement()) {
-		$ar_art = $ob->GetFields();
-		$all_elements_row['ARTNUMBER'] = $ar_art['PROPERTY_ARTNUMBER_VALUE'];
+	$SKU_Array = CCatalogSKU::getProductList(  //массив соответствий товаров предложениям
+		$OffersArray,
+		$id_offers
+	);
+	
+	$SupportArray = array();
+	foreach($SKU_Array as $IdOffer => $IdProduct){
+		if($SupportArray[$IdProduct["ID"]]['NUM_OF_BUYS'] == false) {
+			$SupportArray[$IdProduct["ID"]]['NUM_OF_BUYS'] = $BusketsQuantities[$IdOffer];
+		}else{
+			$SupportArray[$IdProduct["ID"]]['NUM_OF_BUYS'] += $BusketsQuantities[$IdOffer];
+		}
+		if($SupportArray[$IdProduct["ID"]]['NUM_OF_BUYS'] > $arParams['MIN_QUANTITY'] && !in_array($IdProduct["ID"])){
+			array_push($UnnecessaryProducts, $IdProduct["ID"]);
+		}
+		if($OffersPricesArray[$IdOffer]['PRICE'] < $SupportArray[$IdProduct["ID"]]['MIN_PRICE'] || $SupportArray[$IdProduct["ID"]]['MIN_PRICE'] == false){
+			$SupportArray[$IdProduct["ID"]]['MIN_PRICE'] = $OffersPricesArray[$IdOffer]['PRICE'];
+			$SupportArray[$IdProduct["ID"]]['CURRENCY'] = $OffersPricesArray[$IdOffer]['CURRENCY'];
+		}
+		if($OffersPricesArray[$IdOffer]['PRICE'] > $SupportArray[$IdProduct["ID"]]['MAX_PRICE']){
+			$SupportArray[$IdProduct["ID"]]['MAX_PRICE'] = $OffersPricesArray[$IdOffer]['PRICE'];
+			$SupportArray[$IdProduct["ID"]]['CURRENCY'] = $OffersPricesArray[$IdOffer]['CURRENCY'];
+		}
 	}
-	if($num_of_buy <= $arParams['MIN_QUANTITY']) {
-		array_push($result_array, $all_elements_row);
-	}	
 }	
+
+$AllProducts = array();
+$AllProductsID = array();
+$all_elements_filter["!ID"] = $UnnecessaryProducts;
+$all_elements_filter['IBLOCK_ID'] = $id_catalog;
+$DBProducts = CIBlockElement::GetList(  // все продукты
+	Array(),
+	$all_elements_filter,
+	false,
+	false,
+	Array(
+		"ID","NAME","ACTIVE","DETAIL_PAGE_URL"
+	)
+);
+while ($DBProductsRow = $DBProducts->GetNext()) {
+	$ChildArray = array("ID"=>$DBProductsRow["ID"],"NAME"=>$DBProductsRow["NAME"],"DETAIL_PAGE_URL"=>$DBProductsRow["DETAIL_PAGE_URL"]);
+	array_push($AllProducts, $ChildArray);
+	array_push($AllProductsID, $DBProductsRow["ID"]);
+}
+
+$dbProductPrice = CPrice::GetListEx( // цены всех продуктов
+    array(),
+    array("PRODUCT_ID" => $AllProductsID),
+    false,
+    false,
+    array("PRODUCT_ID", "PRICE", "CURRENCY")
+);
+$ProductsPricesArray = array();
+while($dbProductPriceRow = $dbProductPrice->Fetch()) { 
+	$ProductsPricesArray[$dbProductPriceRow["PRODUCT_ID"]] = array("PRICE" => $dbProductPriceRow["PRICE"], "CURRENCY" => $dbProductPriceRow["CURRENCY"]);
+}
+
+$AllArtnumbers = array();
+$dbArtnumbers = CIBlockElement::GetList(     // все артикулы
+	array(), 
+	array('IBLOCK_ID' => $id_catalog, 'ID' => $AllProductsID), 
+	false, 
+	false, 
+	array('ID', 'PROPERTY', 'PROPERTY_ARTNUMBER')
+);
+while($dbArtnumbersRow = $dbArtnumbers->GetNextElement()) {
+	$arArt = $dbArtnumbersRow->GetFields();
+	$AllArtnumbers[$arArt['ID']] = $arArt['PROPERTY_ARTNUMBER_VALUE'];
+}
+
+for($i=0; $i<count($AllProducts); $i++){
+	$AllProducts[$i]["ARTNUMBER"] = $AllArtnumbers[$AllProducts[$i]["ID"]];
+	if($ProductsPricesArray[$AllProducts[$i]["ID"]] != false){
+		$AllProducts[$i]['MIN_PRICE'] = $ProductsPricesArray[$AllProducts[$i]["ID"]]["PRICE"];
+		$AllProducts[$i]['MAX_PRICE'] = $ProductsPricesArray[$AllProducts[$i]["ID"]]["PRICE"];
+		$AllProducts[$i]['CURRENCY'] = $ProductsPricesArray[$AllProducts[$i]["ID"]]["CURRENCY"];
+	}
+	if($BusketsQuantities[$AllProducts[$i]["ID"]] != false){
+		$AllProducts[$i]['NUM_OF_BUYS'] = $BusketsQuantities[$AllProducts[$i]["ID"]];
+	}
+	if($SupportArray[$AllProducts[$i]["ID"]]["MIN_PRICE"] != false && $SupportArray[$AllProducts[$i]["ID"]]["MAX_PRICE"] != false) {
+		$AllProducts[$i]['MIN_PRICE'] = $SupportArray[$AllProducts[$i]["ID"]]["MIN_PRICE"];
+		$AllProducts[$i]['MAX_PRICE'] = $SupportArray[$AllProducts[$i]["ID"]]["MAX_PRICE"];
+		$AllProducts[$i]['CURRENCY'] = $SupportArray[$AllProducts[$i]["ID"]]["CURRENCY"];
+	}
+	
+	if($AllProducts[$i]['NUM_OF_BUYS'] == false) {
+		$AllProducts[$i]['NUM_OF_BUYS'] = $SupportArray[$AllProducts[$i]["ID"]]['NUM_OF_BUYS'];
+	}else{
+		$AllProducts[$i]['NUM_OF_BUYS'] += $SupportArray[$AllProducts[$i]["ID"]]['NUM_OF_BUYS'];
+	}
+}
 
 function sort_worstsellers($a, $b) {
 	return strcmp($a['NUM_OF_BUYS'], $b['NUM_OF_BUYS']);
 }
-usort($result_array, "sort_worstsellers");
-
-
-
-
-
+usort($AllProducts, "sort_worstsellers");
 
 if($arParams['PAGINATION'] != "все") {
 	$rs_ObjectList = new CDBResult;
-	$rs_ObjectList->InitFromArray($result_array);
+	$rs_ObjectList->InitFromArray($AllProducts);
 	$rs_ObjectList->NavStart(intval($arParams['PAGINATION']), false);
 	$arResult["NAV_STRING"] = $rs_ObjectList->GetPageNavString("", '');
 	$arResult["PAGE_START"] = $rs_ObjectList->SelectedRowsCount() - ($rs_ObjectList->NavPageNomer - 1) * $rs_ObjectList->NavPageSize;
@@ -196,20 +201,18 @@ if($arParams['PAGINATION'] != "все") {
 		$arResult["products"][] = $ar_Field;
 	}
 }else{
-	$arResult["products"] = $result_array;
+	$arResult["products"] = $AllProducts;
 	$arResult["page_off"] = true;
 }
-
 
 $this->IncludeComponentTemplate(); 
 
 
 
 
+
 //       ********** ПОЧТА **********
 if(CModule::IncludeModule("subscribe")){  
-
-
 
 	$rub_new = CRubric::GetList(
 			array("SORT"=>"ASC", "NAME"=>"ASC"), 
@@ -238,7 +241,6 @@ if(CModule::IncludeModule("subscribe")){
 				$rub_exist = false;
 		}
 	}
-	
 	
 	$boss_group = CGroup::GetList(
 		($by = "id"),
@@ -284,7 +286,6 @@ if(CModule::IncludeModule("subscribe")){
 		}
 		
 	}
-	
 	
 	if($arParams['IS_MAIL'] === 'Y') {
 		$my_subs_info["ACTIVE"] = "Y";
@@ -399,7 +400,6 @@ if(CModule::IncludeModule("subscribe")){
 }
 
 
-
-}
+} // cashe
 
 ?>

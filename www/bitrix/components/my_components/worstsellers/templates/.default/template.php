@@ -21,7 +21,10 @@
 			echo CurrencyFormat($one_product["MIN_PRICE"], $one_product["CURRENCY"]);
 			echo " -<br/>- ";
 			echo CurrencyFormat($one_product["MAX_PRICE"], $one_product["CURRENCY"]);
-		}?></div><div class="worstsallers_row_buys"><?echo $one_product['NUM_OF_BUYS']?></div><div class="worstsallers_row_link"><a href="<?echo $one_product['DETAIL_PAGE_URL']?>" target="_blank">Страница<br/>товара</a></div>
+		}?></div><div class="worstsallers_row_buys"><?
+		echo $one_product['NUM_OF_BUYS'];
+		if(!$one_product['NUM_OF_BUYS']){echo '0';}
+		?></div><div class="worstsallers_row_link"><a href="<?echo $one_product['DETAIL_PAGE_URL']?>" target="_blank">Страница<br/>товара</a></div>
 </div><? endforeach ?><br/>
 <?echo $arResult["NAV_STRING"];?>
 <br/>
